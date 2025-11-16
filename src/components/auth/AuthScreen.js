@@ -6,7 +6,7 @@ import ErrorMessage from '../common/ErrorMessage';
 export default function AuthScreen() {
   const { login, register } = useAuth();
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ username: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -22,7 +22,7 @@ export default function AuthScreen() {
       if (mode === 'login') {
         await login(form.email, form.password);
       } else {
-        await register(form.name, form.email, form.password);
+        await register(form.username, form.email, form.password);
       }
     } catch (err) {
       const msg = err?.response?.data?.detail || err.message || 'Authentication failed';
@@ -42,10 +42,10 @@ export default function AuthScreen() {
         <form onSubmit={handleSubmit} className="space-y-4 mt-4">
           {mode === 'register' && (
             <div>
-              <label className="block text-sm font-medium mb-1">Name</label>
+              <label className="block text-sm font-medium mb-1">Username</label>
               <input
-                name="name"
-                value={form.name}
+                name="username"
+                value={form.username}
                 onChange={handleChange}
                 className="w-full border rounded px-3 py-2"
                 required
