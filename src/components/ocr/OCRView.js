@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { apiLists, apiOCR } from '../../services/api';
-import LoadingSpinner from '../common/LoadingSpinner';
 
 export default function OCRView() {
   const [file, setFile] = useState(null);
