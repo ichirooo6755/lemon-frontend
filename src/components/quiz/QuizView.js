@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { apiLists, apiReviews } from '../../services/api';
+import { apiLists, apiQuiz } from '../../services/api';
 import LoadingSpinner from '../common/LoadingSpinner';
 import useSpeech from '../../hooks/useSpeech';
 
@@ -56,7 +56,7 @@ export default function QuizView() {
   const handleAnswer = async (isCorrect) => {
     if (!current) return;
     try {
-      await apiReviews.submit({
+      await apiQuiz.submit({
         word_id: current.id,
         correct: !!isCorrect,
         mode,
