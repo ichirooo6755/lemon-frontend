@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 export default function useSpeech(lang = 'ja-JP') {
-  const [supported, setSupported] = useState(typeof window !== 'undefined' && 'speechSynthesis' in window);
+  const [supported] = useState(typeof window !== 'undefined' && 'speechSynthesis' in window);
 
   useEffect(() => {
     if (!supported) return;
