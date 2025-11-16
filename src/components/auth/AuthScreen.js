@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import LoadingSpinner from '../common/LoadingSpinner';
 import ErrorMessage from '../common/ErrorMessage';
 
 export default function AuthScreen() {
   const { login, register } = useAuth();
+  const navigate = useNavigate();
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ username: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
@@ -24,6 +26,8 @@ export default function AuthScreen() {
       } else {
         await register(form.username, form.email, form.password);
       }
+      // Redirect to main app after successful login/register
+      navigate('/lists');
     } catch (err) {
       const msg = err?.response?.data?.detail || err.message || 'Authentication failed';
       setError(msg);
