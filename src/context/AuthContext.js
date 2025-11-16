@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import api from '../services/api';
+import { apiAuth } from '../services/api';
 
 /**
  * Authentication Context
@@ -34,7 +34,7 @@ export const AuthProvider = ({ children }) => {
      */
     const login = async (email, password) => {
         try {
-            const response = await api.auth.login(email, password);
+            const response = await apiAuth.login(email, password);
             const token = response.access_token || response.token;
             const userData = response.user || response;
             localStorage.setItem('token', token);
@@ -56,7 +56,7 @@ export const AuthProvider = ({ children }) => {
      */
     const register = async (username, email, password) => {
         try {
-            const response = await api.auth.register(username, email, password, username);
+            const response = await apiAuth.register(username, email, password, username);
             const token = response.access_token || response.token;
             const userData = response.user || response;
             localStorage.setItem('token', token);
