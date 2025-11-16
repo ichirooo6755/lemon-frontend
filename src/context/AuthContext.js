@@ -34,16 +34,16 @@ export const AuthProvider = ({ children }) => {
      */
     const login = async (email, password) => {
         try {
-            const { access_token, user: userData } = await api.auth.login(email, password);
-            localStorage.setItem('token', access_token);
+            const response = await api.auth.login(email, password);
+            const token = response.access_token || response.token;
+            const userData = response.user || response;
+            localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(userData));
             setUser(userData);
             return { success: true };
         } catch (error) {
-            return { 
-                success: false, 
-                error: error.response?.data?.detail || 'Login failed' 
-            };
+            console.error('Login error:', error);
+            throw error;
         }
     };
 
@@ -54,18 +54,18 @@ export const AuthProvider = ({ children }) => {
      * @param {string} username - Username
      * @returns {Object} Success status and error message if failed
      */
-    const register = async (email, password, username) => {
+    const register = async (username, email, password) => {
         try {
-            const { access_token, user: userData } = await api.auth.register(email, password, username);
-            localStorage.setItem('token', access_token);
+            const response = await api.auth.register(username, email, password, username);
+            const token = response.access_token || response.token;
+            const userData = response.user || response;
+            localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(userData));
             setUser(userData);
             return { success: true };
         } catch (error) {
-            return { 
-                success: false, 
-                error: error.response?.data?.detail || 'Registration failed' 
-            };
+            console.error('Register error:', error);
+            throw error;
         }
     };
 
