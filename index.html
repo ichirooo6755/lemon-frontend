@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vocabulary Learner - React SPA</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <!-- Axios -->
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <!-- React, ReactDOM, and Babel for JSX in browser -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Chart.js for statistics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* Basic animations and helpers */
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+    .modal-backdrop { background: rgba(0,0,0,0.5); }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // --- Configuration ---
+    const API_BASE_URL = "http://localhost:8000/api";
+
+    // --- Axios API Client with JWT ---
+    const api = axios.create({ baseURL: API_BASE_URL });
+
+    // Attach token to all requests
+    api.interceptors.request.use((config) => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    });
+
+    // Handle 401 responses globally
+    api.interceptors.response.use(
+      (res) => res,
+      (error) => {
+        if (error.response && error.response.status === 401) {
+          // Auto-logout on 401
+          localStorage.removeItem('token');
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    // --- Utilities ---
+    const cx = (...classes) => classes.filter(Boolean).join(' ');
+
+    function getErrorMessage(err) {
+      return (
+        err?.response?.data?.detail ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'An unexpected error occurred.'
+      );
+    }
+
+    function speak(text, lang = 'ja-JP') {
+      try {
+        if (!('speechSynthesis' in window)) {
+          alert('Speech synthesis not supported in this browser.');
+          return;
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        const voices = window.speechSynthesis.getVoices();
+        const voice = voices.find(v => v.lang === lang) || voices.find(v => v.lang.startsWith(lang.split('-')[0])) || voices[0];
+        if (voice) utterance.voice = voice;
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {
+        console.error('TTS error:', e);
+      }
+    }
+
+    // preload voices
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
+
+    // --- Toast System ---
+    const ToastContext = React.createContext(null);
+
+    function ToastProvider({ children }) {
+      const [toasts, setToasts] = React.useState([]);
+      const addToast = (type, message) => {
+        const id = Math.random().toString(36).slice(2);
+        setToasts(prev => [...prev, { id, type, message }]);
+        setTimeout(() => {
+          setToasts(prev => prev.filter(t => t.id !== id));
+        }, 3500);
+      };
+      return (
+        <ToastContext.Provider value={{ addToast }}>
+          {children}
+          <div className="fixed top-4 right-4 space-y-2 z-50">
+            {toasts.map(t => (
+              <div key={t.id} className={cx('px-4 py-3 rounded shadow text-white',
+                t.type === 'error' && 'bg-red-500',
+                t.type === 'success' && 'bg-green-600',
+                t.type === 'info' && 'bg-blue-600')}>{t.message}</div>
+            ))}
+          </div>
+        </ToastContext.Provider>
+      );
+    }
+
+    function useToast() {
+      return React.useContext(ToastContext);
+    }
+
+    // --- Auth Context ---
+    const AuthContext = React.createContext(null);
+
+    function AuthProvider({ children }) {
+      const [token, setToken] = React.useState(localStorage.getItem('token'));
+      const isAuthenticated = !!token;
+
+      const login = async (email, password) => {
+        const res = await api.post('/auth/login', { email, password });
+        const accessToken = res.data?.access_token || res.data?.token || res.data;
+        localStorage.setItem('token', accessToken);
+        setToken(accessToken);
+      };
+
+      const register = async (name, email, password) => {
+        await api.post('/auth/register', { name, email, password });
+        // Auto-login after register
+        await login(email, password);
+      };
+
+      const logout = () => {
+        localStorage.removeItem('token');
+        setToken(null);
+      };
+
+      return (
+        <AuthContext.Provider value={{ token, isAuthenticated, login, register, logout }}>
+          {children}
+        </AuthContext.Provider>
+      );
+    }
+
+    function useAuth() {
+      return React.useContext(AuthContext);
+    }
+
+    // --- Reusable UI Components ---
+    function Spinner({ className = '' }) {
+      return (
+        <div className={cx('flex items-center justify-center', className)}>
+          <svg className="w-6 h-6 text-gray-500 spin" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2a10 10 0 100 20 10 10 0 000-20z" stroke="currentColor" strokeWidth="4" opacity="0.25" />
+            <path d="M22 12A10 10 0 0012 2" stroke="currentColor" strokeWidth="4" />
+          </svg>
+        </div>
+      );
+    }
+
+    function Modal({ open, onClose, title, children, maxWidth = 'max-w-2xl' }) {
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-40 flex items-center justify-center modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
+          <div className={cx('bg-white w-full mx-4 rounded-lg shadow p-6', maxWidth)}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-semibold">{title}</h3>
+              <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+            {children}
+          </div>
+        </div>
+      );
+    }
+
+    function Confirm({ open, title = 'Confirm', message, onConfirm, onCancel }) {
+      return (
+        <Modal open={open} onClose={onCancel} title={title} maxWidth="max-w-md">
+          <p className="text-gray-700 mb-6">{message}</p>
+          <div className="flex justify-end space-x-2">
+            <button onClick={onCancel} className="px-4 py-2 rounded border">Cancel</button>
+            <button onClick={onConfirm} className="px-4 py-2 rounded bg-red-600 text-white">Delete</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    // --- Authentication Screens ---
+    function LoginScreen({ onSwitch }) {
+      const { login } = useAuth();
+      const { addToast } = useToast();
+      const [email, setEmail] = React.useState('');
+      const [password, setPassword] = React.useState('');
+      const [loading, setLoading] = React.useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+          await login(email, password);
+          addToast('success', 'Logged in successfully');
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-lg shadow p-6">
+            <h1 className="text-2xl font-bold mb-6 text-center">Sign in</h1>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium">Email</label>
+                <input type="email" className="mt-1 w-full border rounded px-3 py-2" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Password</label>
+                <input type="password" className="mt-1 w-full border rounded px-3 py-2" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded flex justify-center items-center">
+                {loading ? <Spinner /> : 'Login'}
+              </button>
+            </form>
+            <p className="mt-4 text-center text-sm">No account? <button onClick={onSwitch} className="text-blue-600 hover:underline">Register</button></p>
+          </div>
+        </div>
+      );
+    }
+
+    function RegisterScreen({ onSwitch }) {
+      const { register } = useAuth();
+      const { addToast } = useToast();
+      const [name, setName] = React.useState('');
+      const [email, setEmail] = React.useState('');
+      const [password, setPassword] = React.useState('');
+      const [loading, setLoading] = React.useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+          await register(name, email, password);
+          addToast('success', 'Registered and logged in');
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-lg shadow p-6">
+            <h1 className="text-2xl font-bold mb-6 text-center">Create an account</h1>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium">Name</label>
+                <input type="text" className="mt-1 w-full border rounded px-3 py-2" value={name} onChange={(e) => setName(e.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Email</label>
+                <input type="email" className="mt-1 w-full border rounded px-3 py-2" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Password</label>
+                <input type="password" className="mt-1 w-full border rounded px-3 py-2" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded flex justify-center items-center">
+                {loading ? <Spinner /> : 'Register'}
+              </button>
+            </form>
+            <p className="mt-4 text-center text-sm">Already have an account? <button onClick={onSwitch} className="text-blue-600 hover:underline">Login</button></p>
+          </div>
+        </div>
+      );
+    }
+
+    // --- API Helpers ---
+    const apiLists = {
+      list: () => api.get('/lists').then(r => r.data),
+      create: (payload) => api.post('/lists', payload).then(r => r.data),
+      update: (id, payload) => api.put(`/lists/${id}`, payload).then(r => r.data),
+      remove: (id) => api.delete(`/lists/${id}`).then(r => r.data),
+      words: (id) => api.get(`/lists/${id}/words`).then(r => r.data),
+      addWord: (id, payload) => api.post(`/lists/${id}/words`, payload).then(r => r.data),
+    };
+
+    const apiWords = {
+      update: (id, payload) => api.put(`/words/${id}`, payload).then(r => r.data),
+      remove: (id) => api.delete(`/words/${id}`).then(r => r.data),
+    };
+
+    const apiOCR = {
+      extract: (file) => {
+        const form = new FormData();
+        form.append('image', file);
+        return api.post('/ocr', form, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data);
+      }
+    };
+
+    const apiStats = {
+      get: () => api.get('/stats').then(r => r.data),
+    };
+
+    const apiReviews = {
+      submit: ({ word_id, correct, mode }) => api.post('/reviews', { word_id, correct, mode }).then(r => r.data),
+    };
+
+    // --- Lists and Words Management ---
+    function WordForm({ initial, onSave, saving }) {
+      const [kobun, setKobun] = React.useState(initial?.kobun_text || '');
+      const [english, setEnglish] = React.useState(initial?.english_translation || '');
+      const [readings, setReadings] = React.useState(Array.isArray(initial?.readings) ? initial.readings.join(', ') : (initial?.readings || ''));
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        const payload = {
+          kobun_text: kobun,
+          english_translation: english,
+          readings: readings.split(',').map(s => s.trim()).filter(Boolean),
+        };
+        onSave(payload);
+      };
+
+      return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium">Kobun (Classical Japanese)</label>
+            <textarea className="mt-1 w-full border rounded px-3 py-2" rows={2} value={kobun} onChange={(e) => setKobun(e.target.value)} required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium">English Translation</label>
+            <textarea className="mt-1 w-full border rounded px-3 py-2" rows={2} value={english} onChange={(e) => setEnglish(e.target.value)} required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium">Readings (comma-separated)</label>
+            <input className="mt-1 w-full border rounded px-3 py-2" value={readings} onChange={(e) => setReadings(e.target.value)} placeholder="e.g. いと, かし" />
+          </div>
+          <div className="flex justify-end space-x-2">
+            <button type="submit" className="px-4 py-2 rounded bg-green-600 text-white flex items-center justify-center">{saving ? <Spinner /> : 'Save'}</button>
+          </div>
+        </form>
+      );
+    }
+
+    function WordsTable({ words, onEdit, onDelete, onSpeak }) {
+      if (!words?.length) {
+        return <p className="text-gray-500">No words yet.</p>;
+      }
+      return (
+        <div className="overflow-x-auto">
+          <table className="min-w-full bg-white rounded shadow">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="text-left px-4 py-2">Kobun</th>
+                <th className="text-left px-4 py-2">English</th>
+                <th className="text-left px-4 py-2">Readings</th>
+                <th className="text-left px-4 py-2">Next Review</th>
+                <th className="px-4 py-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {words.map(w => (
+                <tr key={w.id} className="border-t">
+                  <td className="px-4 py-2 whitespace-pre-wrap">{w.kobun_text}</td>
+                  <td className="px-4 py-2 whitespace-pre-wrap">{w.english_translation}</td>
+                  <td className="px-4 py-2">{Array.isArray(w.readings) ? w.readings.join('、') : (w.readings || '')}</td>
+                  <td className="px-4 py-2">{w.next_review || '-'}</td>
+                  <td className="px-4 py-2 space-x-2 text-right">
+                    <button onClick={() => onSpeak(w.kobun_text)} className="px-2 py-1 text-blue-600 hover:underline">Speak</button>
+                    <button onClick={() => onEdit(w)} className="px-2 py-1 text-green-600 hover:underline">Edit</button>
+                    <button onClick={() => onDelete(w)} className="px-2 py-1 text-red-600 hover:underline">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    function ListsView() {
+      const { addToast } = useToast();
+      const [lists, setLists] = React.useState([]);
+      const [loading, setLoading] = React.useState(true);
+      const [error, setError] = React.useState(null);
+      const [selected, setSelected] = React.useState(null);
+      const [words, setWords] = React.useState([]);
+      const [subLoading, setSubLoading] = React.useState(false);
+      const [createOpen, setCreateOpen] = React.useState(false);
+      const [newName, setNewName] = React.useState('');
+      const [editList, setEditList] = React.useState(null);
+      const [deleteList, setDeleteList] = React.useState(null);
+
+      const [wordModal, setWordModal] = React.useState({ open: false, editing: null });
+      const [savingWord, setSavingWord] = React.useState(false);
+      const [deleteWord, setDeleteWord] = React.useState(null);
+
+      const fetchLists = React.useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const data = await apiLists.list();
+          setLists(data || []);
+        } catch (err) {
+          setError(getErrorMessage(err));
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      const fetchWords = React.useCallback(async (listId) => {
+        if (!listId) return;
+        setSubLoading(true);
+        try {
+          const data = await apiLists.words(listId);
+          setWords(Array.isArray(data) ? data : (data?.items || []));
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setSubLoading(false);
+        }
+      }, [addToast]);
+
+      React.useEffect(() => { fetchLists(); }, [fetchLists]);
+      React.useEffect(() => { if (selected) fetchWords(selected.id); }, [selected, fetchWords]);
+
+      const handleCreateList = async () => {
+        if (!newName.trim()) return;
+        try {
+          const created = await apiLists.create({ name: newName.trim() });
+          setLists(prev => [created, ...prev]);
+          setNewName('');
+          setCreateOpen(false);
+          addToast('success', 'List created');
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        }
+      };
+
+      const handleUpdateList = async () => {
+        try {
+          const updated = await apiLists.update(editList.id, { name: editList.name });
+          setLists(prev => prev.map(l => l.id === editList.id ? updated : l));
+          setEditList(null);
+          addToast('success', 'List updated');
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        }
+      };
+
+      const handleDeleteList = async () => {
+        try {
+          await apiLists.remove(deleteList.id);
+          setLists(prev => prev.filter(l => l.id !== deleteList.id));
+          if (selected?.id === deleteList.id) {
+            setSelected(null);
+            setWords([]);
+          }
+          addToast('success', 'List deleted');
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setDeleteList(null);
+        }
+      };
+
+      const handleSaveWord = async (payload) => {
+        try {
+          setSavingWord(true);
+          if (wordModal.editing) {
+            const updated = await apiWords.update(wordModal.editing.id, payload);
+            setWords(prev => prev.map(w => w.id === updated.id ? updated : w));
+            addToast('success', 'Word updated');
+          } else {
+            const created = await apiLists.addWord(selected.id, payload);
+            setWords(prev => [created, ...prev]);
+            addToast('success', 'Word added');
+          }
+          setWordModal({ open: false, editing: null });
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setSavingWord(false);
+        }
+      };
+
+      const handleDeleteWord = async () => {
+        try {
+          await apiWords.remove(deleteWord.id);
+          setWords(prev => prev.filter(w => w.id !== deleteWord.id));
+          addToast('success', 'Word deleted');
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setDeleteWord(null);
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-bold">Vocabulary Lists</h2>
+            <button onClick={() => setCreateOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded">New List</button>
+          </div>
+          {loading ? (
+            <div className="flex items-center space-x-2"><Spinner /><span>Loading lists...</span></div>
+          ) : error ? (
+            <div className="text-red-600">{error}</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {lists.map(list => (
+                <div key={list.id} className={cx('bg-white rounded shadow p-4 border', selected?.id === list.id && 'ring-2 ring-blue-500')}>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold">{list.name}</h3>
+                    </div>
+                    <div className="space-x-2 text-sm">
+                      <button onClick={() => setEditList({ ...list })} className="text-green-700 hover:underline">Edit</button>
+                      <button onClick={() => setDeleteList(list)} className="text-red-700 hover:underline">Delete</button>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <button onClick={() => setSelected(list)} className="px-3 py-1 border rounded hover:bg-gray-50">Open</button>
+                  </div>
+                </div>
+              ))}
+              {!lists.length && (
+                <div className="col-span-full text-gray-500">No lists yet. Create one to get started.</div>
+              )}
+            </div>
+          )}
+
+          {selected && (
+            <div className="bg-white rounded shadow p-4 border">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-semibold">{selected.name} - Words</h3>
+                <div className="space-x-2">
+                  <button onClick={() => setWordModal({ open: true, editing: null })} className="bg-blue-600 text-white px-4 py-2 rounded">Add Word</button>
+                  <button onClick={() => fetchWords(selected.id)} className="px-4 py-2 border rounded">Refresh</button>
+                </div>
+              </div>
+              <div className="mt-4">
+                {subLoading ? (
+                  <div className="flex items-center space-x-2"><Spinner /><span>Loading words...</span></div>
+                ) : (
+                  <WordsTable
+                    words={words}
+                    onEdit={(w) => setWordModal({ open: true, editing: w })}
+                    onDelete={(w) => setDeleteWord(w)}
+                    onSpeak={(text) => speak(text, 'ja-JP')}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Create List Modal */}
+          <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create New List" maxWidth="max-w-md">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium">List Name</label>
+                <input className="mt-1 w-full border rounded px-3 py-2" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Kobun Basics" />
+              </div>
+              <div className="flex justify-end">
+                <button onClick={handleCreateList} className="px-4 py-2 rounded bg-green-600 text-white">Create</button>
+              </div>
+            </div>
+          </Modal>
+
+          {/* Edit List Modal */}
+          <Modal open={!!editList} onClose={() => setEditList(null)} title="Edit List" maxWidth="max-w-md">
+            {editList && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium">List Name</label>
+                  <input className="mt-1 w-full border rounded px-3 py-2" value={editList.name} onChange={(e) => setEditList({ ...editList, name: e.target.value })} />
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={handleUpdateList} className="px-4 py-2 rounded bg-green-600 text-white">Save</button>
+                </div>
+              </div>
+            )}
+          </Modal>
+
+          {/* Delete List Confirm */}
+          <Confirm open={!!deleteList} onCancel={() => setDeleteList(null)} onConfirm={handleDeleteList} message={deleteList ? `Delete list "${deleteList.name}" and all its words?` : ''} />
+
+          {/* Add/Edit Word Modal */}
+          <Modal open={wordModal.open} onClose={() => setWordModal({ open: false, editing: null })} title={wordModal.editing ? 'Edit Word' : 'Add Word'}>
+            <WordForm initial={wordModal.editing} onSave={handleSaveWord} saving={savingWord} />
+          </Modal>
+
+          {/* Delete Word Confirm */}
+          <Confirm open={!!deleteWord} onCancel={() => setDeleteWord(null)} onConfirm={handleDeleteWord} message={deleteWord ? `Delete word "${deleteWord.kobun_text}"?` : ''} />
+        </div>
+      );
+    }
+
+    // --- Quiz ---
+    function QuizView() {
+      const { addToast } = useToast();
+      const [lists, setLists] = React.useState([]);
+      const [loadingLists, setLoadingLists] = React.useState(false);
+      const [selectedListId, setSelectedListId] = React.useState('');
+      const [mode, setMode] = React.useState('flashcards'); // 'flashcards' | 'mc' | 'typing'
+      const [words, setWords] = React.useState([]);
+      const [loadingWords, setLoadingWords] = React.useState(false);
+      const [index, setIndex] = React.useState(0);
+      const [showAnswer, setShowAnswer] = React.useState(false);
+      const [score, setScore] = React.useState(0);
+      const [completed, setCompleted] = React.useState(false);
+
+      React.useEffect(() => {
+        (async () => {
+          try {
+            setLoadingLists(true);
+            const data = await apiLists.list();
+            setLists(data || []);
+          } catch (err) {
+            addToast('error', getErrorMessage(err));
+          } finally {
+            setLoadingLists(false);
+          }
+        })();
+      }, [addToast]);
+
+      const startQuiz = async () => {
+        if (!selectedListId) return;
+        try {
+          setLoadingWords(true);
+          const data = await apiLists.words(selectedListId);
+          const ws = Array.isArray(data) ? data : (data?.items || []);
+          setWords(ws);
+          setIndex(0);
+          setScore(0);
+          setShowAnswer(false);
+          setCompleted(false);
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setLoadingWords(false);
+        }
+      };
+
+      const current = words[index];
+
+      const handleAnswer = async (isCorrect) => {
+        try {
+          await apiReviews.submit({ word_id: current.id, correct: !!isCorrect, mode });
+        } catch (err) {
+          // Still allow progression but notify
+          addToast('error', `Review submit failed: ${getErrorMessage(err)}`);
+        }
+        if (isCorrect) setScore(s => s + 1);
+        if (index + 1 < words.length) {
+          setIndex(i => i + 1);
+          setShowAnswer(false);
+        } else {
+          setCompleted(true);
+        }
+      };
+
+      const MCQuestion = () => {
+        // Build options: correct + 3 random others
+        const options = React.useMemo(() => {
+          const others = words.filter(w => w.id !== current.id);
+          const shuffled = others.sort(() => Math.random() - 0.5).slice(0, 3);
+          const opts = [...shuffled, current].sort(() => Math.random() - 0.5);
+          return opts;
+        }, [current, words]);
+
+        return (
+          <div className="space-y-4">
+            <div>
+              <p className="text-gray-600">Definition</p>
+              <h3 className="text-xl font-semibold">{current.english_translation}</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {options.map(o => (
+                <button key={o.id} onClick={() => handleAnswer(o.id === current.id)} className="px-4 py-3 rounded border hover:bg-blue-50 text-left">
+                  {o.kobun_text}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      };
+
+      const TypingQuestion = () => {
+        const [answer, setAnswer] = React.useState('');
+        const submit = () => {
+          const isCorrect = answer.trim() === current.kobun_text.trim();
+          handleAnswer(isCorrect);
+        };
+        return (
+          <div className="space-y-4">
+            <div>
+              <p className="text-gray-600">Definition</p>
+              <h3 className="text-xl font-semibold">{current.english_translation}</h3>
+            </div>
+            <input value={answer} onChange={e => setAnswer(e.target.value)} className="w-full border rounded px-3 py-2" placeholder="Type the Kobun term" onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+            <button onClick={submit} className="px-4 py-2 rounded bg-green-600 text-white">Submit</button>
+          </div>
+        );
+      };
+
+      const Flashcard = () => (
+        <div className="space-y-4">
+          <div className="border rounded p-6 bg-white shadow text-center">
+            {!showAnswer ? (
+              <>
+                <p className="text-gray-600">Definition</p>
+                <h3 className="text-xl font-semibold">{current.english_translation}</h3>
+                <div className="mt-4">
+                  <button onClick={() => setShowAnswer(true)} className="px-4 py-2 border rounded">Show Answer</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-gray-600">Kobun</p>
+                <h3 className="text-2xl font-bold">{current.kobun_text}</h3>
+                <p className="text-gray-600 mt-2">Readings: {Array.isArray(current.readings) ? current.readings.join('、') : (current.readings || '-')}</p>
+                <div className="mt-4 flex items-center justify-center space-x-2">
+                  <button onClick={() => speak(current.kobun_text, 'ja-JP')} className="px-3 py-2 border rounded">Speak</button>
+                  <button onClick={() => handleAnswer(true)} className="px-4 py-2 rounded bg-green-600 text-white">I was right</button>
+                  <button onClick={() => handleAnswer(false)} className="px-4 py-2 rounded bg-red-600 text-white">I was wrong</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold">Quiz</h2>
+          <div className="bg-white rounded shadow p-4 border space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-sm font-medium">Vocabulary List</label>
+                <select className="mt-1 w-full border rounded px-3 py-2" value={selectedListId} onChange={e => setSelectedListId(e.target.value)}>
+                  <option value="">Select list</option>
+                  {lists.map(l => <option value={l.id} key={l.id}>{l.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Mode</label>
+                <select className="mt-1 w-full border rounded px-3 py-2" value={mode} onChange={e => setMode(e.target.value)}>
+                  <option value="flashcards">Flashcards</option>
+                  <option value="mc">Multiple Choice</option>
+                  <option value="typing">Typing</option>
+                </select>
+              </div>
+              <div className="md:col-span-2 flex items-end">
+                <button onClick={startQuiz} className="px-4 py-2 rounded bg-blue-600 text-white w-full md:w-auto">
+                  {loadingWords ? 'Loading...' : 'Start Quiz'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {!!words.length && !completed && (
+            <div className="bg-white rounded shadow p-6 border">
+              <div className="flex items-center justify-between mb-4">
+                <div>Question {index + 1} / {words.length}</div>
+                <div>Score: {score}</div>
+              </div>
+              {mode === 'flashcards' && current && <Flashcard />}
+              {mode === 'mc' && current && <MCQuestion />}
+              {mode === 'typing' && current && <TypingQuestion />}
+            </div>
+          )}
+
+          {completed && (
+            <div className="bg-white rounded shadow p-6 border text-center">
+              <h3 className="text-2xl font-bold mb-2">Quiz Complete</h3>
+              <p className="text-lg mb-4">Score: {score} / {words.length} ({((score/words.length)*100).toFixed(1)}%)</p>
+              <div className="space-x-2">
+                <button onClick={startQuiz} className="px-4 py-2 rounded border">Retry</button>
+                <button onClick={() => { setWords([]); setCompleted(false); }} className="px-4 py-2 rounded bg-blue-600 text-white">Back</button>
+              </div>
+            </div>
+          )}
+
+          {!loadingLists && !lists.length && (
+            <div className="text-gray-500">No lists available. Create a list in the Lists tab first.</div>
+          )}
+        </div>
+      );
+    }
+
+    // --- OCR ---
+    function OCRView() {
+      const { addToast } = useToast();
+      const [file, setFile] = React.useState(null);
+      const [extracting, setExtracting] = React.useState(false);
+      const [results, setResults] = React.useState([]);
+      const [lists, setLists] = React.useState([]);
+
+      React.useEffect(() => {
+        (async () => {
+          try {
+            const data = await apiLists.list();
+            setLists(data || []);
+          } catch (err) {
+            addToast('error', getErrorMessage(err));
+          }
+        })();
+      }, [addToast]);
+
+      const handleExtract = async () => {
+        if (!file) return;
+        try {
+          setExtracting(true);
+          const data = await apiOCR.extract(file);
+          setResults(Array.isArray(data) ? data : (data?.items || []));
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        } finally {
+          setExtracting(false);
+        }
+      };
+
+      const addToList = async (word, listId) => {
+        try {
+          await apiLists.addWord(listId, {
+            kobun_text: word.kobun_text || word.term || '',
+            english_translation: word.english_translation || word.definition || '',
+            readings: Array.isArray(word.readings) ? word.readings : (word.readings ? [word.readings] : []),
+          });
+          addToast('success', `Added to list`);
+        } catch (err) {
+          addToast('error', getErrorMessage(err));
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold">OCR - Extract Words from Image</h2>
+          <div className="bg-white rounded shadow p-4 border space-y-4">
+            <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            <button onClick={handleExtract} className="px-4 py-2 rounded bg-indigo-600 text-white disabled:opacity-50" disabled={!file || extracting}>
+              {extracting ? 'Processing...' : 'Extract Words'}
+            </button>
+          </div>
+
+          {!!results.length && (
+            <div className="bg-white rounded shadow p-4 border">
+              <h3 className="text-lg font-semibold mb-3">Extracted Words</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="text-left px-4 py-2">Kobun</th>
+                      <th className="text-left px-4 py-2">English</th>
+                      <th className="text-left px-4 py-2">Readings</th>
+                      <th className="px-4 py-2">Add to List</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((w, idx) => (
+                      <tr key={idx} className="border-t">
+                        <td className="px-4 py-2 whitespace-pre-wrap">{w.kobun_text || w.term}</td>
+                        <td className="px-4 py-2 whitespace-pre-wrap">{w.english_translation || w.definition}</td>
+                        <td className="px-4 py-2">{Array.isArray(w.readings) ? w.readings.join('、') : (w.readings || '')}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex items-center space-x-2">
+                            <select className="border rounded px-2 py-1" id={`ocr-select-${idx}`}>
+                              {lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                            </select>
+                            <button onClick={() => {
+                              const select = document.getElementById(`ocr-select-${idx}`);
+                              addToList(w, select.value);
+                            }} className="px-3 py-1 rounded bg-green-600 text-white">Add</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // --- Statistics ---
+    function StatsView() {
+      const { addToast } = useToast();
+      const [loading, setLoading] = React.useState(true);
+      const [stats, setStats] = React.useState(null);
+      const chartRef = React.useRef(null);
+      const chartInstance = React.useRef(null);
+
+      React.useEffect(() => {
+        (async () => {
+          try {
+            setLoading(true);
+            const data = await apiStats.get();
+            setStats(data || {});
+          } catch (err) {
+            addToast('error', getErrorMessage(err));
+          } finally {
+            setLoading(false);
+          }
+        })();
+      }, [addToast]);
+
+      React.useEffect(() => {
+        if (!stats?.progress?.labels || !stats?.progress?.data) return;
+        const ctx = chartRef.current?.getContext('2d');
+        if (!ctx) return;
+        if (chartInstance.current) chartInstance.current.destroy();
+        chartInstance.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: stats.progress.labels,
+            datasets: [{
+              label: 'Words Learned',
+              data: stats.progress.data,
+              borderColor: 'rgba(59,130,246,1)',
+              backgroundColor: 'rgba(59,130,246,0.15)',
+              fill: true,
+              tension: 0.25,
+            }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+        });
+      }, [stats]);
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold">Statistics</h2>
+          {loading ? (
+            <div className="flex items-center space-x-2"><Spinner /><span>Loading stats...</span></div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2 bg-white rounded shadow p-4 border h-80">
+                <h3 className="font-semibold mb-2">Progress Over Time</h3>
+                {stats?.progress?.labels?.length ? (
+                  <canvas ref={chartRef} className="w-full h-full"></canvas>
+                ) : (
+                  <div className="text-gray-500">No progress data.</div>
+                )}
+              </div>
+              <div className="bg-white rounded shadow p-4 border space-y-3">
+                <h3 className="font-semibold mb-2">Quick Stats</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded bg-blue-50">
+                    <div className="text-sm text-gray-600">Total Lists</div>
+                    <div className="text-2xl font-bold">{stats?.totals?.lists ?? '-'}</div>
+                  </div>
+                  <div className="p-3 rounded bg-green-50">
+                    <div className="text-sm text-gray-600">Total Words</div>
+                    <div className="text-2xl font-bold">{stats?.totals?.words ?? '-'}</div>
+                  </div>
+                  <div className="p-3 rounded bg-yellow-50">
+                    <div className="text-sm text-gray-600">Due Today</div>
+                    <div className="text-2xl font-bold">{stats?.totals?.due_today ?? '-'}</div>
+                  </div>
+                  <div className="p-3 rounded bg-purple-50">
+                    <div className="text-sm text-gray-600">Reviews Done</div>
+                    <div className="text-2xl font-bold">{stats?.totals?.reviews ?? '-'}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // --- Main Application Layout ---
+    function Navbar({ active, onChange, onLogout }) {
+      const tabs = [
+        { id: 'lists', label: 'Lists' },
+        { id: 'quiz', label: 'Quiz' },
+        { id: 'ocr', label: 'OCR' },
+        { id: 'stats', label: 'Stats' },
+      ];
+      return (
+        <header className="bg-white shadow-sm">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <h1 className="text-xl font-bold text-blue-700">Vocabulary Learner</h1>
+              <nav className="hidden md:flex space-x-2">
+                {tabs.map(t => (
+                  <button key={t.id} onClick={() => onChange(t.id)} className={cx('px-3 py-2 rounded', active === t.id ? 'bg-blue-600 text-white' : 'hover:bg-gray-100')}>{t.label}</button>
+                ))}
+              </nav>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button onClick={onLogout} className="px-3 py-2 rounded border">Logout</button>
+            </div>
+          </div>
+          {/* Mobile Tabs */}
+          <div className="md:hidden border-t">
+            <nav className="flex overflow-x-auto">
+              {tabs.map(t => (
+                <button key={t.id} onClick={() => onChange(t.id)} className={cx('flex-1 px-3 py-2', active === t.id ? 'bg-blue-600 text-white' : '')}>{t.label}</button>
+              ))}
+            </nav>
+          </div>
+        </header>
+      );
+    }
+
+    function Dashboard() {
+      const { logout } = useAuth();
+      const [tab, setTab] = React.useState('lists');
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          <Navbar active={tab} onChange={setTab} onLogout={logout} />
+          <main className="flex-1 max-w-7xl mx-auto w-full p-4 space-y-6">
+            {tab === 'lists' && <ListsView />}
+            {tab === 'quiz' && <QuizView />}
+            {tab === 'ocr' && <OCRView />}
+            {tab === 'stats' && <StatsView />}
+          </main>
+          <footer className="text-center text-sm text-gray-500 py-6">© {new Date().getFullYear()} Vocabulary Learner</footer>
+        </div>
+      );
+    }
+
+    function Root() {
+      const { isAuthenticated } = useAuth();
+      const [authScreen, setAuthScreen] = React.useState('login'); // 'login' | 'register'
+
+      return (
+        <>
+          {!isAuthenticated ? (
+            authScreen === 'login' ? (
+              <LoginScreen onSwitch={() => setAuthScreen('register')} />
+            ) : (
+              <RegisterScreen onSwitch={() => setAuthScreen('login')} />
+            )
+          ) : (
+            <Dashboard />
+          )}
+        </>
+      );
+    }
+
+    function App() {
+      return (
+        <ToastProvider>
+          <AuthProvider>
+            <Root />
+          </AuthProvider>
+        </ToastProvider>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
