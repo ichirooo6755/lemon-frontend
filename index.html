@@ -659,7 +659,7 @@
         try {
           await apiReviews.submit({ word_id: current.id, correct: !!isCorrect, mode });
         } catch (err) {
-          // Still allow progression but notify
+          // Still allow progression, but notify
           addToast('error', `Review submit failed: ${getErrorMessage(err)}`);
         }
         if (isCorrect) setScore(s => s + 1);
