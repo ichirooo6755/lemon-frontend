@@ -27,8 +27,10 @@ export default function AuthScreen() {
         await register(form.username, form.email, form.password);
       }
       // Redirect to main app after successful login/register
-      navigate('/lists');
+      console.log('Authentication successful, navigating to /lists');
+      navigate('/lists', { replace: true });
     } catch (err) {
+      console.error('Authentication error:', err);
       const msg = err?.response?.data?.detail || err.message || 'Authentication failed';
       setError(msg);
     } finally {

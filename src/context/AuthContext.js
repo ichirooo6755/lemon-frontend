@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { apiAuth } from '../services/api';
+import { decodeToken } from '../utils/jwt-decoder';
 
 /**
  * Authentication Context
@@ -19,9 +20,22 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         const token = localStorage.getItem('token');
         const savedUser = localStorage.getItem('user');
-        
+
         if (token && savedUser) {
-            setUser(JSON.parse(savedUser));
+            try {
+                const decodedToken = decodeToken(token);
+                if (decodedToken && decodedToken.exp * 1000 > Date.now()) {
+                    setUser(JSON.parse(savedUser));
+                } else {
+                    // Token expired, clear storage
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user');
+                }
+            } catch (error) {
+                console.error('Error validating token:', error);
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+            }
         }
         setLoading(false);
     }, []);
@@ -36,7 +50,17 @@ export const AuthProvider = ({ children }) => {
         try {
             const response = await apiAuth.login(email, password);
             const token = response.access_token || response.token;
-            const userData = response.user || response;
+            if (!token) {
+                throw new Error('No token received from server');
+            }
+
+            // Decode and validate token
+            const decodedToken = decodeToken(token);
+            if (!decodedToken || !decodedToken.sub) {
+                throw new Error('Invalid token received');
+            }
+
+            const userData = response.user || { sub: decodedToken.sub };
             localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(userData));
             setUser(userData);
@@ -58,7 +82,17 @@ export const AuthProvider = ({ children }) => {
         try {
             const response = await apiAuth.register(username, email, password, username);
             const token = response.access_token || response.token;
-            const userData = response.user || response;
+            if (!token) {
+                throw new Error('No token received from server');
+            }
+
+            // Decode and validate token
+            const decodedToken = decodeToken(token);
+            if (!decodedToken || !decodedToken.sub) {
+                throw new Error('Invalid token received');
+            }
+
+            const userData = response.user || { sub: decodedToken.sub };
             localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(userData));
             setUser(userData);
