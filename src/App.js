@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import AuthScreen from './components/auth/AuthScreen';
+import { decodeToken } from './utils/jwt-decoder';
 import Navigation from './components/common/Navigation';
 import WordListsView from './components/lists/WordListsView';
 import QuizView from './components/quiz/QuizView';
@@ -37,6 +38,16 @@ function AppShell() {
 }
 
 function App() {
+  React.useEffect(() => {
+    const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJpY2hpcm91dCIsImV4cCI6MTc2MzM1MjQ2Nn0.sB42j59_FkCaF1AUXBHH1InGuOcqSvsCla0cWgItsf4';
+    const user = { "sub": "ichirout" };
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+
+    const decodedToken = decodeToken(token);
+    console.log('Decoded token:', JSON.stringify(decodedToken));
+  }, []);
+
   return (
     <AuthProvider>
       <BrowserRouter>
